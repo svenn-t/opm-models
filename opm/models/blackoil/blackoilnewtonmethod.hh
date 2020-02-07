@@ -36,9 +36,6 @@
 
 BEGIN_PROPERTIES
 
-NEW_PROP_TAG(DpMaxRel);
-NEW_PROP_TAG(DsMax);
-NEW_PROP_TAG(PriVarOscilationThreshold);
 
 SET_SCALAR_PROP(NewtonMethod, DpMaxRel, 0.3);
 SET_SCALAR_PROP(NewtonMethod, DsMax, 0.2);
