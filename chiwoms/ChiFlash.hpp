@@ -58,25 +58,9 @@ class ChiFlash
 {
     enum { numPhases = FluidSystem::numPhases };
     enum { numComponents = FluidSystem::numComponents };
-    enum { Comp2Idx = FluidSystem::Comp2Idx }; //rename for generic ?
-    enum { Comp0Idx = FluidSystem::Comp0Idx }; //rename for generic ?
-    enum { Comp1Idx = FluidSystem::Comp1Idx }; //rename for generic ?
     enum { oilPhaseIdx = FluidSystem::oilPhaseIdx};
     enum { gasPhaseIdx = FluidSystem::gasPhaseIdx};
-    enum { numMiscibleComponents = 2}; //octane, co2
-    enum { numMisciblePhases = 2}; //oil, gas
-    enum {
-        numEq =
-        numMisciblePhases+
-        numMisciblePhases*numMiscibleComponents
-    };//pressure, saturation, composition
-
-    enum {
-        p0PvIdx = 0, // pressure first phase primary variable index
-        S0PvIdx = 1, // saturation first phase primary variable index
-        x00PvIdx = S0PvIdx + 1, // molefraction first phase first component primary variable index
-        //numMiscibleComponennets*numMisciblePhases-1 molefractions/primvar follow
-    };
+    enum { numEq = numComponents};  // one equation for each component
 
 public:
     /*!
@@ -93,10 +77,7 @@ public:
     {
 
         using InputEval = typename FluidState::Scalar;
-        using Matrix = Dune::FieldMatrix<InputEval, numEq, numEq>;
-        using Vetor = Dune::FieldVector<InputEval, numEq>;
         using FlashEval = Opm::DenseAd::Evaluation</*Scalar=*/InputEval, /*numDerivs=*/numEq>;
-        using FlashDefectVector = Dune::FieldVector<FlashEval, numEq>;
         using FlashFluidState = Opm::CompositionalFluidState<FlashEval, FluidSystem, /*energy=*/false>;
         using ComponentVector = Dune::FieldVector<typename FluidState::Scalar, numComponents>;
 
@@ -142,7 +123,7 @@ public:
         if (verbosity >= 1) {
             std::cout << "********" << std::endl;
             std::cout << "Flash calculations on Cell " << spatialIdx << std::endl;
-            std::cout << "Stability test with K = [" << K << "], z = [" << globalComposition << "], P = " << fluidState.pressure(0) << ", and T = " << fluidState.temperature(0) << std::endl;
+            std::cout << "Stability test with K = [" << K << "], z = [" << globalComposition << "], P = " << fluidState.pressure(0)/1e5 << " [Bar], and T = " << fluidState.temperature(0) << " [K]." << std::endl;
         }
 
         // First we do stability test to check if cell is single-phase. If so, we do not need to do Newton update
@@ -170,7 +151,6 @@ public:
                     std::cout << "Initial guess: K = [" << K << "], z = [" << globalComposition << "], and L = " << L << std::endl;
                 }
                 newtonCompositionUpdate_(K, L, fluidState, globalComposition, verbosity);
-                
             }
 
             // Successive substitution
@@ -208,7 +188,6 @@ public:
         // Update saturation
         Evaluation So = (L*Z_L/(L*Z_L+(1-L)*Z_V));
         Evaluation Sg = 1-So;
-        //Evaluation Sg = (1-L)*Z_V/(L*Z_L+(1-L)*Z_V);
         fluidState.setSaturation(oilPhaseIdx, So);
         fluidState.setSaturation(gasPhaseIdx, Sg);
 
@@ -248,7 +227,6 @@ protected:
     template <class FlashFluidState>
     static typename FlashFluidState::Scalar wilsonK_(const FlashFluidState& fluidState, int compIdx)
     {
-        using FlashEval = typename FlashFluidState::Scalar;
         const auto& acf = FluidSystem::acentricFactor(compIdx);
         const auto& T_crit = FluidSystem::criticalTemperature(compIdx);
         const auto& T = fluidState.temperature(0);
@@ -293,7 +271,7 @@ protected:
             L = 1.0;
 
             // Print
-            if (verbosity == 3 || verbosity == 4) {
+            if (verbosity >= 1) {
                 std::cout << "Cell is single-phase, liquid (L = 1.0) due to Li's phase labeling method giving T < Tc_est (" << T << " < " << Tc_est << ")!" << std::endl;
             }
         }
@@ -302,7 +280,7 @@ protected:
             L = 0.0;
             
             // Print
-            if (verbosity == 3 || verbosity == 4) {
+            if (verbosity >= 1) {
                 std::cout << "Cell is single-phase, vapor (L = 0.0) due to Li's phase labeling method giving T >= Tc_est (" << T << " >= " << Tc_est << ")!" << std::endl;
             }
         }
@@ -503,7 +481,6 @@ protected:
     template <class FlashFluidState, class ComponentVector>
     static void checkStability_(const FlashFluidState& fluidState, bool& isTrivial, ComponentVector& K, ComponentVector& xy_loc, Evaluation& S_loc, const ComponentVector& globalComposition, bool isGas, int verbosity)
     {
-        using FlashEval = typename FlashFluidState::Scalar;
         using ThisType = TwoPhaseThreeComponentFluidSystem<Scalar>;
         using PengRobinsonMixture = typename Opm::PengRobinsonMixture<Scalar, ThisType>;
 
@@ -546,10 +523,10 @@ protected:
                 fluidState_global.setMoleFraction(phaseIdx, compIdx, globalComposition[compIdx]);
             }
 
-            typename FluidSystem::template ParameterCache<FlashEval> paramCache_fake;
+            typename FluidSystem::template ParameterCache<Scalar> paramCache_fake;
             paramCache_fake.updatePhase(fluidState_fake, phaseIdx);
 
-            typename FluidSystem::template ParameterCache<FlashEval> paramCache_global;
+            typename FluidSystem::template ParameterCache<Scalar> paramCache_global;
             paramCache_global.updatePhase(fluidState_global, phaseIdx);
 
             //fugacity for fake phases each component
@@ -633,8 +610,8 @@ protected:
                                          int verbosity)
     {
         // Newton declarations
-        using NewtonVector = Dune::FieldVector<Evaluation, numMisciblePhases*numMiscibleComponents+1>;
-        using NewtonMatrix = Dune::FieldMatrix<Evaluation, numMisciblePhases*numMiscibleComponents+1, numMisciblePhases*numMiscibleComponents+1>;
+        using NewtonVector = Dune::FieldVector<Evaluation, numPhases*numComponents+1>;
+        using NewtonMatrix = Dune::FieldMatrix<Evaluation, numPhases*numComponents+1, numPhases*numComponents+1>;
         NewtonVector newtonX;
         NewtonVector newtonB;
         NewtonMatrix newtonA;
@@ -645,21 +622,31 @@ protected:
             std::cout << std::setw(10) << "Iteration" << std::setw(16) << "Norm2(step)" << std::setw(16) << "Norm2(Residual)" << std::endl;
         }
 
-        // Compute x and y from K, L and Z
-        computeLiquidVapor_(fluidState, L, K, globalComposition);
+        // // Compute x and y from K, L and Z
+        // computeLiquidVapor_(fluidState, L, K, globalComposition);
 
-        // Assign primary variables (x, y and L)
-        for (int compIdx=0; compIdx<numComponents; ++compIdx){
-            newtonX[compIdx] = Opm::getValue(fluidState.moleFraction(oilPhaseIdx, compIdx));
-            newtonX[compIdx + numMiscibleComponents] = Opm::getValue(fluidState.moleFraction(gasPhaseIdx, compIdx));
-        }
-        newtonX[numMiscibleComponents*numMiscibleComponents] = Opm::getValue(L);
+        // // Assign primary variables (x, y and L)
+        // for (int compIdx=0; compIdx<numComponents; ++compIdx){
+        //     newtonX[compIdx] = Opm::getValue(fluidState.moleFraction(oilPhaseIdx, compIdx));
+        //     newtonX[compIdx + numComponents] = Opm::getValue(fluidState.moleFraction(gasPhaseIdx, compIdx));
+        // }
+        // newtonX[numComponents*numComponents] = Opm::getValue(L);
 
         // 
         // Main Newton loop
         // 
         bool convFug = false; /* for convergence check */
         for (int i = 0; i< 100; ++i){
+            // Compute x and y from K, L and Z
+            computeLiquidVapor_(fluidState, L, K, globalComposition);
+
+            // Assign primary variables (x, y and L)
+            for (int compIdx=0; compIdx<numComponents; ++compIdx){
+                newtonX[compIdx] = Opm::getValue(fluidState.moleFraction(oilPhaseIdx, compIdx));
+                newtonX[compIdx + numComponents] = Opm::getValue(fluidState.moleFraction(gasPhaseIdx, compIdx));
+            }
+            newtonX[numComponents*numComponents] = Opm::getValue(L);
+
             // Evaluate residuals (newtonB)
             evalDefect_(newtonB, newtonX, fluidState, globalComposition);
 
@@ -674,35 +661,43 @@ protected:
             }
 
             // Check fugacity equilibrium for convergence
-            convFug = checkFugacityEquil_(newtonB);
+            convFug = checkFugacityEquil_(newtonB, newtonX);
 
             // If convergence have been met, we abort; else we update step and loop once more
             if (convFug == true) {
                 // Extract x, y and L together with calculation of K
+                L = newtonX[numComponents*numComponents];
                 for (int compIdx=0; compIdx<numComponents; ++compIdx){
-                    fluidState.setMoleFraction(oilPhaseIdx, compIdx, newtonX[compIdx]);
-                    fluidState.setMoleFraction(gasPhaseIdx, compIdx, newtonX[compIdx + numMiscibleComponents]);
-                    K[compIdx] = newtonX[compIdx + numMiscibleComponents] / newtonX[compIdx];
-                }
-                L = newtonX[numMiscibleComponents*numMiscibleComponents];
+                    if (L < 1.0 && L > 0.0) {
+                        fluidState.setMoleFraction(oilPhaseIdx, compIdx, newtonX[compIdx]);
+                        fluidState.setMoleFraction(gasPhaseIdx, compIdx, newtonX[compIdx + numComponents]);
+                        K[compIdx] = newtonX[compIdx + numComponents] / newtonX[compIdx];
+                    }
+                    else {
+                        fluidState.setMoleFraction(oilPhaseIdx, compIdx, globalComposition[compIdx]);
+                        fluidState.setMoleFraction(gasPhaseIdx, compIdx, globalComposition[compIdx]);
+                        K[compIdx] = 1.0;
+                    }
 
+                }
+                
                 // Print info
                 if (verbosity >= 1) {
                     std::cout << "Solution converged to the following result :" << std::endl;
                     std::cout << "x = [";
                     for (int compIdx=0; compIdx<numComponents; ++compIdx){
                         if (compIdx < numComponents - 1)
-                            std::cout << newtonX[compIdx] << " ";
+                            std::cout << fluidState.moleFraction(oilPhaseIdx, compIdx) << " ";
                         else
-                            std::cout << newtonX[compIdx];
+                            std::cout << fluidState.moleFraction(oilPhaseIdx, compIdx);
                     }
                     std::cout << "]" << std::endl;
                     std::cout << "y = [";
                     for (int compIdx=0; compIdx<numComponents; ++compIdx){
                         if (compIdx < numComponents - 1)
-                            std::cout << newtonX[compIdx + numMiscibleComponents] << " ";
+                            std::cout << fluidState.moleFraction(gasPhaseIdx, compIdx) << " ";
                         else
-                            std::cout << newtonX[compIdx + numMiscibleComponents];
+                            std::cout << fluidState.moleFraction(gasPhaseIdx, compIdx);
                     }
                     std::cout << "]" << std::endl;
                     std::cout << "K = [" << K << "]" << std::endl;
@@ -719,6 +714,15 @@ protected:
 
                 // Update current solution (newtonX) with simple relaxation method (percentage of step applied)
                 updateCurrentSol_(newtonX, newtonDelta);
+
+                // Assign x and y to K, and assign L
+                L = newtonX[numComponents*numComponents];
+                for (int compIdx=0; compIdx<numComponents; ++compIdx){
+                    if (newtonX[compIdx] < 1e-10)
+                        K[compIdx] = 1.0;
+                    else    
+                        K[compIdx] = newtonX[compIdx + numComponents] / newtonX[compIdx];
+                }
             }
         }
         throw std::runtime_error(" Newton composition update did not converge within maxIterations");
@@ -733,7 +737,9 @@ protected:
             Scalar w_tmp = Opm::getValue(Opm::min(Opm::max(x[i] + d[i], 0.0), 1.0) - x[i]) / Opm::getValue(d[i]);
             w = Opm::min(w, w_tmp);
         }
-
+        std::cout << "x = " << x << std::endl;
+        std::cout << "d = " << d << std::endl;
+        std::cout << "w = " << w << std::endl;
         // Loop over the solution vector and apply the smallest percentage update
         for (int i=0; i<x.size(); ++i){
             x[i] += w*d[i];
@@ -741,7 +747,7 @@ protected:
     }
 
     template <class DefectVector>
-    static bool checkFugacityEquil_(DefectVector& b)
+    static bool checkFugacityEquil_(DefectVector& b, DefectVector& x)
     {
         // Init. fugacity vector
         DefectVector fugVec;
@@ -750,12 +756,13 @@ protected:
         // OBS: If the equations in b changes in evalDefect_ then you have to change here as well!
         for (int compIdx=0; compIdx<numComponents; ++compIdx){
             fugVec[compIdx] = 0.0;
-            fugVec[compIdx+numMiscibleComponents] = b[compIdx+numMiscibleComponents];
+            fugVec[compIdx+numComponents] = b[compIdx+numComponents];
         }
-        fugVec[numMiscibleComponents*numMisciblePhases] = 0.0;
-        
+        fugVec[numComponents*numPhases] = 0.0;
+        Scalar L = Opm::getValue(x[numComponents*numPhases]);
+
         // Check if norm(fugVec) is less than tolerance
-        bool conv = fugVec.two_norm() < 1e-6;
+        bool conv = fugVec.two_norm() < 1e-6 || L == 1.0 || L == 0.0;
         return conv;
     }
 
@@ -767,12 +774,10 @@ protected:
     {
         // Put x and y in a FluidState instance for fugacity calculations
         FluidState fluidState(fluidStateIn);
-        ComponentVector K;
         for (int compIdx=0; compIdx<numComponents; ++compIdx){
             fluidState.setMoleFraction(oilPhaseIdx, compIdx, x[compIdx]);
-            fluidState.setMoleFraction(gasPhaseIdx, compIdx, x[compIdx + numMiscibleComponents]);
+            fluidState.setMoleFraction(gasPhaseIdx, compIdx, x[compIdx + numComponents]);
         }
-        
 
         // Compute fugacities
         using ParamCache = typename FluidSystem::template ParameterCache<typename FluidState::Scalar>;
@@ -788,19 +793,19 @@ protected:
         // Compute residuals for Newton update. Primary variables are: x, y, and L
         // TODO: Make this AD
         // Extract L
-        Evaluation L = x[numMiscibleComponents*numMisciblePhases];
+        Evaluation L = x[numComponents*numPhases];
         
         // Residuals
         // OBS: the residuals are negative in the newton system!
         for (int compIdx=0; compIdx<numComponents; ++compIdx){
             // z - L*x - (1-L) * y
-            b[compIdx] = -globalComposition[compIdx] + L*x[compIdx] + (1-L)*x[compIdx + numMiscibleComponents];
+            b[compIdx] = -globalComposition[compIdx] + L*x[compIdx] + (1-L)*x[compIdx + numComponents];
             
             // (f_liquid/f_vapor) - 1 = 0
-            b[compIdx + numMiscibleComponents] = -(fluidState.fugacity(oilPhaseIdx, compIdx) / fluidState.fugacity(gasPhaseIdx, compIdx)) + 1.0;
+            b[compIdx + numComponents] = -(fluidState.fugacity(oilPhaseIdx, compIdx) / fluidState.fugacity(gasPhaseIdx, compIdx)) + 1.0;
         
             // sum(x) - sum(y) = 0
-            b[numMiscibleComponents*numMisciblePhases] += -x[compIdx] + x[compIdx + numMiscibleComponents];
+            b[numComponents*numPhases] += -x[compIdx] + x[compIdx + numComponents];
         }
     }//end valDefect
 
