@@ -619,18 +619,8 @@ protected:
 
         // Print header
         if (verbosity == 2 || verbosity == 4) {
-            std::cout << std::setw(10) << "Iteration" << std::setw(16) << "Norm2(step)" << std::setw(16) << "Norm2(Residual)" << std::endl;
+            std::cout << std::setw(11) << "Iteration" << std::setw(16) << "Norm2(step)" << std::setw(17) << "Norm2(fugRatio)" << std::endl;
         }
-
-        // // Compute x and y from K, L and Z
-        // computeLiquidVapor_(fluidState, L, K, globalComposition);
-
-        // // Assign primary variables (x, y and L)
-        // for (int compIdx=0; compIdx<numComponents; ++compIdx){
-        //     newtonX[compIdx] = Opm::getValue(fluidState.moleFraction(oilPhaseIdx, compIdx));
-        //     newtonX[compIdx + numComponents] = Opm::getValue(fluidState.moleFraction(gasPhaseIdx, compIdx));
-        // }
-        // newtonX[numComponents*numComponents] = Opm::getValue(L);
 
         // 
         // Main Newton loop
@@ -645,28 +635,18 @@ protected:
                 newtonX[compIdx] = Opm::getValue(fluidState.moleFraction(oilPhaseIdx, compIdx));
                 newtonX[compIdx + numComponents] = Opm::getValue(fluidState.moleFraction(gasPhaseIdx, compIdx));
             }
-            newtonX[numComponents*numComponents] = Opm::getValue(L);
+            newtonX[numPhases*numComponents] = Opm::getValue(L);
 
             // Evaluate residuals (newtonB)
             evalDefect_(newtonB, newtonX, fluidState, globalComposition);
 
-            // Print iteration info
-            if (verbosity == 2 || verbosity == 4) {
-                if (i == 0) {
-                    std::cout << std::setw(10) << i << std::setw(16) << "N/A" << std::setw(16)  << newtonB.two_norm() << std::endl;
-                }
-                else {
-                    std::cout << std::setw(10) << i << std::setw(16) << newtonDelta.two_norm() << std::setw(16) << newtonB.two_norm() << std::endl;
-                }
-            }
-
             // Check fugacity equilibrium for convergence
-            convFug = checkFugacityEquil_(newtonB, newtonX);
+            convFug = checkFugacityEquil_(newtonB, newtonX, newtonDelta, i, verbosity);
 
             // If convergence have been met, we abort; else we update step and loop once more
             if (convFug == true) {
                 // Extract x, y and L together with calculation of K
-                L = newtonX[numComponents*numComponents];
+                L = newtonX[numPhases*numComponents];
                 for (int compIdx=0; compIdx<numComponents; ++compIdx){
                     if (L < 1.0 && L > 0.0) {
                         fluidState.setMoleFraction(oilPhaseIdx, compIdx, newtonX[compIdx]);
@@ -716,7 +696,7 @@ protected:
                 updateCurrentSol_(newtonX, newtonDelta);
 
                 // Assign x and y to K, and assign L
-                L = newtonX[numComponents*numComponents];
+                L = newtonX[numPhases*numComponents];
                 for (int compIdx=0; compIdx<numComponents; ++compIdx){
                     if (newtonX[compIdx] < 1e-10)
                         K[compIdx] = 1.0;
@@ -737,9 +717,9 @@ protected:
             Scalar w_tmp = Opm::getValue(Opm::min(Opm::max(x[i] + d[i], 0.0), 1.0) - x[i]) / Opm::getValue(d[i]);
             w = Opm::min(w, w_tmp);
         }
-        std::cout << "x = " << x << std::endl;
-        std::cout << "d = " << d << std::endl;
-        std::cout << "w = " << w << std::endl;
+        // std::cout << "x = " << x << std::endl;
+        // std::cout << "d = " << d << std::endl;
+        // std::cout << "w = " << w << std::endl;
         // Loop over the solution vector and apply the smallest percentage update
         for (int i=0; i<x.size(); ++i){
             x[i] += w*d[i];
@@ -747,7 +727,7 @@ protected:
     }
 
     template <class DefectVector>
-    static bool checkFugacityEquil_(DefectVector& b, DefectVector& x)
+    static bool checkFugacityEquil_(DefectVector& b, DefectVector& x, DefectVector& d, int i, int verbosity)
     {
         // Init. fugacity vector
         DefectVector fugVec;
@@ -760,6 +740,15 @@ protected:
         }
         fugVec[numComponents*numPhases] = 0.0;
         Scalar L = Opm::getValue(x[numComponents*numPhases]);
+
+        if (verbosity == 2 || verbosity == 4) {
+            if (i == 0) {
+                std::cout << std::setw(11) << i << std::setw(16) << "N/A" << std::setw(17) << fugVec.two_norm() << std::endl;
+            }
+            else {
+                std::cout << std::setw(11) << i << std::setw(16) << d.two_norm() << std::setw(17) << fugVec.two_norm() << std::endl;
+            }
+        }
 
         // Check if norm(fugVec) is less than tolerance
         bool conv = fugVec.two_norm() < 1e-6 || L == 1.0 || L == 0.0;
