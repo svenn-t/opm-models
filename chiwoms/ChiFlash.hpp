@@ -179,7 +179,7 @@ public:
                     std::cout << "Calculate composition using Succcessive Substitution." << std::endl;
                     std::cout << "Initial guess: K = [" << K << "], z = [" << globalComposition << "], and L = " << L << std::endl;
                 }
-                successiveSubstitutionComposition_(K, L, fluidState, globalComposition, /*standAlone=*/true, verbosity);
+                successiveSubstitutionComposition_(K, L, fluidState, globalComposition, verbosity);
             }
         }
 
@@ -293,7 +293,7 @@ protected:
             L = 1.0;
 
             // Print
-            if (verbosity == 3 || verbosity == 4) {
+            if (verbosity >= 1) {
                 std::cout << "Cell is single-phase, liquid (L = 1.0) due to Li's phase labeling method giving T < Tc_est (" << T << " < " << Tc_est << ")!" << std::endl;
             }
         }
@@ -302,7 +302,7 @@ protected:
             L = 0.0;
             
             // Print
-            if (verbosity == 3 || verbosity == 4) {
+            if (verbosity >= 1) {
                 std::cout << "Cell is single-phase, vapor (L = 0.0) due to Li's phase labeling method giving T >= Tc_est (" << T << " >= " << Tc_est << ")!" << std::endl;
             }
         }
@@ -842,24 +842,27 @@ protected:
     
     template <class FlashFluidState, class ComponentVector>
     static void successiveSubstitutionComposition_(ComponentVector& K, Evaluation& L, FlashFluidState& fluidState, const ComponentVector& globalComposition, 
-                                                   bool standAlone, int verbosity)
+                                                   int verbosity)
     {
-        // Determine max. iterations based on if it will be used as a standalone flash or as a pre-process to Newton (or other) method.
-        int maxIterations;
-        if (standAlone == true)
-            maxIterations = 100;
-        else
-            maxIterations = 10;
+        // Declarations
+        ComponentVector fugRatio0;
+        ComponentVector fugRatio1;
+        ComponentVector fugRatio2;
+        using ParamCache = typename FluidSystem::template ParameterCache<typename FlashFluidState::Scalar>;
+
+        // Print header
+        if (verbosity == 2 || verbosity == 4) {
+            std::cout << std::setw(11) << "Iteration" << std::setw(16) << "Fugacity ratio" << std::setw(22) << "norm(Fugacity ratio)" << std::endl;
+        }
 
         // 
         // Successive substitution loop
         // 
-        for (int i=0; i < maxIterations; ++i){
+        for (int i=0; i < 100; ++i){
             // Compute (normalized) liquid and vapor mole fractions
             computeLiquidVapor_(fluidState, L, K, globalComposition);
 
             // Calculate fugacity coefficient
-            using ParamCache = typename FluidSystem::template ParameterCache<typename FlashFluidState::Scalar>;
             ParamCache paramCache;
             for (int phaseIdx=0; phaseIdx<numPhases; ++phaseIdx){
                 paramCache.updatePhase(fluidState, phaseIdx);
@@ -869,14 +872,27 @@ protected:
                 }
             }
             
-            // Calculate fugacity ratio
-            ComponentVector fugRatio;
+            // Calculate fugacity ratio for convergence
+            ComponentVector convfugRatio;
+            ComponentVector newfugRatio;
+            Scalar gL(0.0);
+            Scalar gV(0.0);
+            Scalar gmix;
             for (int compIdx=0; compIdx<numComponents; ++compIdx){
-                fugRatio[compIdx] = (fluidState.fugacity(oilPhaseIdx, compIdx)/fluidState.fugacity(gasPhaseIdx, compIdx)) - 1.0;
+                newfugRatio[compIdx] = (fluidState.fugacity(oilPhaseIdx, compIdx)/fluidState.fugacity(gasPhaseIdx, compIdx));
+                convfugRatio[compIdx] = newfugRatio[compIdx] - 1.0;
+                gL += (Opm::getValue(fluidState.moleFraction(oilPhaseIdx, compIdx)) * Opm::getValue(Opm::log(fluidState.fugacity(oilPhaseIdx, compIdx))));
+                gV += (Opm::getValue(fluidState.moleFraction(gasPhaseIdx, compIdx)) * Opm::getValue(Opm::log(fluidState.fugacity(gasPhaseIdx, compIdx))));
+            }
+            gmix = ((1 - Opm::getValue(L)) * Opm::getValue(gV)) + (Opm::getValue(L) * Opm::getValue(gL));
+
+            // Print info
+            if (verbosity == 2 || verbosity == 4) {
+                std::cout << std::setw(5) << i << std::setw(5) << newfugRatio << std::setw(16) << convfugRatio.two_norm() <<std::endl;
             }
 
             // Check convergence
-            if (fugRatio.two_norm() < 1e-6){
+            if (convfugRatio.two_norm() < 1e-6){
                 // Print info
                 if (verbosity >= 1) {
                     std::cout << "Solution converged to the following result :" << std::endl;
@@ -904,9 +920,69 @@ protected:
             
             //  If convergence is not met, K is updated in a successive substitution manner
             else{
-                // Update K
-                for (int compIdx=0; compIdx<numComponents; ++compIdx){
-                    K[compIdx] *= (fugRatio[compIdx] + 1.0);
+                
+                // Store the three latest fugRatios for possible GDEM promotion
+                if (i > 1)
+                    fugRatio2 = fugRatio1;
+                if (i > 0)
+                    fugRatio1 = fugRatio0;
+                fugRatio0 = newfugRatio;
+
+                // After 5 successive-substitution iterations we do a GDEM promotion
+                if (i > 0 && i % 5 == 0) {
+                    ComponentVector K_gdem(0.0);
+                    for (int compIdx=0; compIdx<numComponents; ++compIdx){
+                        K_gdem[compIdx] = K[compIdx];
+                    }
+                    GDEMUpdate_(K_gdem, fugRatio0, fugRatio1, fugRatio2);
+
+                    // Check Gibbs mixture to see if we accept or reject update
+                    // Solve Rachford-Rice to get L from updated K
+                    Evaluation L_test;
+                    L_test = solveRachfordRice_g_(K_gdem, globalComposition, 0);
+
+                    // Compute (normalized) liquid and vapor mole fractions
+                    FlashFluidState fluidState_test(fluidState);
+                    computeLiquidVapor_(fluidState_test, L_test, K_gdem, globalComposition);
+
+                    // Calculate fugacity coefficient
+                    ParamCache paramCache_test;
+                    for (int phaseIdx=0; phaseIdx<numPhases; ++phaseIdx){
+                        paramCache_test.updatePhase(fluidState_test, phaseIdx);
+                        for (int compIdx=0; compIdx<numComponents; ++compIdx){
+                            Evaluation phi_test = FluidSystem::fugacityCoefficient(fluidState_test, paramCache_test, phaseIdx, compIdx);
+                            fluidState_test.setFugacityCoefficient(phaseIdx, compIdx, phi_test);
+                        }
+                    }
+                    Scalar gL_test(0.0);
+                    Scalar gV_test(0.0);
+                    Scalar gmix_test;
+                    for (int compIdx=0; compIdx<numComponents; ++compIdx){
+                        gL_test += (Opm::getValue(fluidState_test.moleFraction(oilPhaseIdx, compIdx)) * Opm::getValue(Opm::log(fluidState_test.fugacity(oilPhaseIdx, compIdx))));
+                        gV_test += (Opm::getValue(fluidState_test.moleFraction(gasPhaseIdx, compIdx)) * Opm::getValue(Opm::log(fluidState_test.fugacity(gasPhaseIdx, compIdx))));
+                    }
+                    gmix_test = ((1 - Opm::getValue(L_test)) * Opm::getValue(gV_test)) + (Opm::getValue(L_test) * Opm::getValue(gL_test));
+
+                    // If GDEM update reduces mixture Gibbs energy, we accept it; else we just do regular successive substitution
+                    if (gmix_test < gmix) {
+                        for (int compIdx=0; compIdx<numComponents; ++compIdx){
+                            K[compIdx] = K_gdem[compIdx];
+                        }
+                    }
+                    else {
+                        std::cout << "GDEM promotion rejected (" << gmix_test << " >= " << gmix << ")!" << std::endl;
+                        for (int compIdx=0; compIdx<numComponents; ++compIdx){
+                            K[compIdx] *= newfugRatio[compIdx];
+                        }
+                    }
+
+                }
+                // Normal successive-substitution update
+                else {
+                    // Update K
+                    for (int compIdx=0; compIdx<numComponents; ++compIdx){
+                        K[compIdx] *= newfugRatio[compIdx];
+                    }
                 }
 
                 // Solve Rachford-Rice to get L from updated K
@@ -915,6 +991,59 @@ protected:
 
         }
         throw std::runtime_error("Successive substitution composition update did not converge within maxIterations");
+    }
+
+    template <class ComponentVector>
+    static void GDEMUpdate_(ComponentVector& K, ComponentVector& fugRatio0, ComponentVector& fugRatio1, ComponentVector& fugRatio2)
+    {
+        // Decalarations of matrices
+        using bMatrix = Dune::FieldMatrix<Evaluation, 3, 3>;
+        using uMatrix = Dune::FieldMatrix<Evaluation, 3, numComponents>;
+        bMatrix b(0.0);
+        bMatrix epsilon;
+        uMatrix deltaU;
+
+        // OBS: We following Whitson & Brule, Phase Behavior, 2000, including the transformation of variables suggested there
+        // Several temp. calculations follows. First, deltaU's which are just log(fugRatio).
+        for (int compIdx=0; compIdx<numComponents; ++compIdx){
+            deltaU[0][compIdx] = Opm::log(fugRatio0[compIdx]);
+            deltaU[1][compIdx] = Opm::log(fugRatio1[compIdx]);
+            deltaU[2][compIdx] = Opm::log(fugRatio2[compIdx]);
+        }
+
+        // Calculate b_jk from eq (4.50c).
+        for (int j=0; j < 3; ++j) {
+            for (int k=0; k < 3; ++k) {
+                for (int compIdx=0; compIdx<numComponents; ++compIdx){
+                    b[j][k] += (deltaU[j][compIdx] * deltaU[k][compIdx]);
+                }
+            }
+        }
+
+        // Calculate transformed variable, epsilon_jk = (b_jk - b_12)/b_12. OBS: epsilon_12=0 by definition
+        for (int j=0; j < 3; ++j) {
+            for (int k=0; k < 3; ++k) {
+                if (j == 1 && k == 2)
+                    epsilon[1][2] = 0.0;
+                else
+                    epsilon[j][k] = (b[j][k] - b[1][2]) / b[1][2];
+            }
+        }
+
+        // Calculate eqs. (4.50a) and (4.50b) with transformed variables, epsilon.
+        Scalar mu1;
+        mu1 = (Opm::getValue(epsilon[0][2]) + 1 - ((Opm::getValue(epsilon[0][1]) + 1) * (Opm::getValue(epsilon[2][2]))) / ((Opm::getValue(epsilon[1][1]) + 1) * (Opm::getValue(epsilon[2][2]) + 1)) - 1);
+        
+        Scalar mu2;
+        mu2 = (Opm::getValue(epsilon[0][1]) + 1 - ((Opm::getValue(epsilon[0][2]) + 1) * (Opm::getValue(epsilon[1][1]))) / ((Opm::getValue(epsilon[1][1]) + 1) * (Opm::getValue(epsilon[2][2]) + 1)) - 1);
+
+        // Finally we calculate the update step eq. (4.49).
+        ComponentVector updK;
+        for (int compIdx=0; compIdx<numComponents; ++compIdx){
+            updK[compIdx] = Opm::log(K[compIdx]) + ((Opm::getValue(deltaU[0][compIdx]) - (mu2 * Opm::getValue(deltaU[1][compIdx]))) / (1 + mu1 + mu2));
+            K[compIdx] = Opm::exp(updK[compIdx]);
+        }
+
     }
     
 };//end ChiFlash
