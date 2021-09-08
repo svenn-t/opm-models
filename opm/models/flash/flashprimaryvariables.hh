@@ -71,9 +71,11 @@ class FlashPrimaryVariables : public FvBasePrimaryVariables<TypeTag>
 
     enum { numPhases = getPropValue<TypeTag, Properties::NumPhases>() };
     enum { numComponents = getPropValue<TypeTag, Properties::NumComponents>() };
+    using ComponentVector = Dune::FieldVector<Scalar, numComponents>;
 
     using Toolbox = typename Opm::MathToolbox<Evaluation>;
     using EnergyModule = Opm::EnergyModule<TypeTag, getPropValue<TypeTag, Properties::EnableEnergy>()>;
+    using FlashSolver = GetPropType<TypeTag, Properties::FlashSolver>;
 
 public:
     FlashPrimaryVariables() : ParentType()
@@ -99,13 +101,44 @@ public:
      * \copydoc ImmisciblePrimaryVariables::assignMassConservative
      */
     template <class FluidState>
-    void assignMassConservative(const FluidState& fluidState,
-                                const MaterialLawParams& matParams OPM_UNUSED,
-                                bool isInEquilibrium OPM_UNUSED= false)
+    void assignMassConservative(FluidState& fluidState,
+                                const int spatialIdx,
+                                bool isInEquilibrium = false)
     {
-        // there is no difference between naive and mass conservative
-        // assignment in the flash model. (we only need the total
-        // concentrations.)
+        // Definitions
+        Scalar flashTolerance = EWOMS_GET_PARAM(TypeTag, Scalar, FlashTolerance);
+        int flashVerbosity = EWOMS_GET_PARAM(TypeTag, int, FlashVerbosity);
+        std::string flashTwoPhaseMethod = EWOMS_GET_PARAM(TypeTag, std::string, FlashTwoPhaseMethod);
+        
+        // If, for some reason, things are in equilibrium, we skip flash calculations and assign primary variables
+        // based on inputted fluid state
+        if (isInEquilibrium) {
+            assignNaive(fluidState);
+            return;
+        }
+
+        // 
+        // Use flash calculations to equilibrate system, using inputted fluid state as initial condition
+        //
+        // Start with calculating z based on inputted fluid state
+        ComponentVector globalComposition(0.0);
+        Scalar sumMoles = 0.0;
+        std::cout << "assignMassConservative : " << std::endl;
+        for (unsigned phaseIdx = 0; phaseIdx < numPhases; ++phaseIdx) {
+            std::cout << "S (" << phaseIdx << ") = " << fluidState.saturation(phaseIdx) << std::endl;
+            for (unsigned compIdx = 0; compIdx < numComponents; ++compIdx) {
+                std::cout << "Molarity (" << phaseIdx << ", " << compIdx << ") = " << fluidState.molarity(phaseIdx, compIdx) << std::endl;
+                Scalar tmp = Opm::getValue(fluidState.molarity(phaseIdx, compIdx) * fluidState.saturation(phaseIdx));
+                globalComposition[compIdx] += Opm::max(tmp, 1e-8);
+                sumMoles += tmp;
+            }
+        }
+        globalComposition /= sumMoles;
+
+        // Run flash calculations
+        FlashSolver::solve(fluidState, globalComposition, spatialIdx, flashVerbosity, flashTwoPhaseMethod, flashTolerance);
+
+        // Use updated fluid state to assign primary variables
         assignNaive(fluidState);
     }
 
@@ -123,11 +156,14 @@ public:
         EnergyModule::setPriVarTemperatures(*this, fluidState);
 
         // determine the phase presence.
-        Dune::FieldVector<Scalar, numComponents> z(0.0);
+        Dune::FieldVector<Evaluation, numComponents> z(0.0);
         Scalar sumMoles = 0.0;
+        std::cout << "assignNaive : " << std::endl;
         for (unsigned phaseIdx = 0; phaseIdx < numPhases; ++phaseIdx) {
+            std::cout << "S (" << phaseIdx << ") = " << fluidState.saturation(phaseIdx) << std::endl;
             for (unsigned compIdx = 0; compIdx < numComponents; ++compIdx) {
-                Scalar tmp = fluidState.molarity(phaseIdx, compIdx) * fluidState.saturation(phaseIdx);
+                std::cout << "Molarity (" << phaseIdx << ", " << compIdx << ") = " << fluidState.molarity(phaseIdx, compIdx) << std::endl;
+                Scalar tmp = Opm::getValue(fluidState.molarity(phaseIdx, compIdx) * fluidState.saturation(phaseIdx));
                 z[compIdx] += Opm::max(tmp, 1e-8);
                 sumMoles += tmp;
             }
@@ -135,8 +171,8 @@ public:
         z /= sumMoles;
 
         for (int i = 0; i < numComponents - 1; ++i)
-            (*this)[z0Idx + i] = z[i];
-        (*this)[pressure0Idx] = fluidState.pressure(0);
+            (*this)[z0Idx + i] = Opm::getValue(z[i]);
+        (*this)[pressure0Idx] = Opm::getValue(fluidState.pressure(0));
     }
 
     /*!

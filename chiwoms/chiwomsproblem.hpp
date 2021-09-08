@@ -306,6 +306,7 @@ class ChiwomsProblem : public GetPropType<TypeTag, Properties::BaseProblem>
     enum { contiCO2EqIdx = conti0EqIdx + Comp1Idx };
     enum { enableEnergy = getPropValue<TypeTag, Properties::EnableEnergy>() };
     enum { enableDiffusion = getPropValue<TypeTag, Properties::EnableDiffusion>() };
+    enum { numComponents = getPropValue<TypeTag, Properties::NumComponents>() };
 
     using PrimaryVariables = GetPropType<TypeTag, Properties::PrimaryVariables>;
     using RateVector = GetPropType<TypeTag, Properties::RateVector>;
@@ -321,6 +322,8 @@ class ChiwomsProblem : public GetPropType<TypeTag, Properties::BaseProblem>
     using DimMatrix = Dune::FieldMatrix<Scalar, dimWorld, dimWorld>;
     using FullField = Dune::FieldMatrix<Scalar, NX, NY>;//    typedef Dune::FieldMatrix<Scalar, NX, NY> FullField;
     using FieldColumn = Dune::FieldVector<Scalar, NY>;//typedef Dune::FieldVector<Scalar, NY> FieldColumn;
+    using ComponentVector = Dune::FieldVector<Scalar, numComponents>;
+    using FlashSolver = GetPropType<TypeTag, Properties::FlashSolver>;
 
     const unsigned XDIM = 0;
     const unsigned YDIM = 1;
@@ -449,9 +452,10 @@ public:
     void initial(PrimaryVariables& values, const Context& context, unsigned spaceIdx,
                  unsigned timeIdx) const
     {
-        Opm::CompositionalFluidState<Scalar, FluidSystem> fs;
+        Opm::CompositionalFluidState<Evaluation, FluidSystem> fs;
         initialFs(fs, context, spaceIdx, timeIdx);
-        values.assignNaive(fs);
+        int spatialIdx = context.globalSpaceIndex(spaceIdx, timeIdx);
+        values.assignMassConservative(fs, spatialIdx, false);
 
     //std::cout << "primary variables for cell " << context.globalSpaceIndex(spaceIdx, timeIdx) << ": " << values << "\n";
     }
@@ -509,8 +513,10 @@ public:
             values.setMassRate(massRate);
         }
         else if (onRightBoundary_(pos)) {
-            Opm::CompositionalFluidState<Scalar, FluidSystem> fs;
+            Opm::CompositionalFluidState<Evaluation, FluidSystem> fs;
             initialFs(fs, context, spaceIdx, timeIdx);
+            int spatialIdx = context.globalSpaceIndex(spaceIdx, timeIdx);
+            boundaryFlash(fs, spatialIdx);
             values.setFreeFlow(context, spaceIdx, timeIdx, fs);
         }
         else
@@ -543,6 +549,33 @@ private:
     Scalar porosity_;
     Scalar temperature_;
     MaterialLawParams mat_;
+
+    template<class FluidState>
+    void boundaryFlash(FluidState& fluidState, const int spatialIdx) const
+    {
+        // Definitions
+        Scalar flashTolerance = EWOMS_GET_PARAM(TypeTag, Scalar, FlashTolerance);
+        int flashVerbosity = EWOMS_GET_PARAM(TypeTag, int, FlashVerbosity);
+        std::string flashTwoPhaseMethod = EWOMS_GET_PARAM(TypeTag, std::string, FlashTwoPhaseMethod);
+
+        // 
+        // Use flash calculations to equilibrate system, using inputted fluid state as initial condition
+        //
+        // Start with calculating z based on inputted fluid state
+        ComponentVector globalComposition(0.0);
+        Scalar sumMoles = 0.0;
+        for (unsigned phaseIdx = 0; phaseIdx < numPhases; ++phaseIdx) {
+            for (unsigned compIdx = 0; compIdx < numComponents; ++compIdx) {
+                Scalar tmp = Opm::getValue(fluidState.molarity(phaseIdx, compIdx) * fluidState.saturation(phaseIdx));
+                globalComposition[compIdx] += Opm::max(tmp, 1e-8);
+                sumMoles += tmp;
+            }
+        }
+        globalComposition /= sumMoles;
+
+        // Run flash calculations
+        FlashSolver::solve(fluidState, globalComposition, spatialIdx, flashVerbosity, flashTwoPhaseMethod, flashTolerance);
+    }
     
     /*!
      * \copydoc FvBaseProblem::initial
@@ -583,18 +616,24 @@ private:
         fs.setTemperature(temperature_);
 
         // saturation, oil-filled
-        fs.setSaturation(FluidSystem::oilPhaseIdx, 1.0);
-        fs.setSaturation(FluidSystem::gasPhaseIdx, 0.0);
+        fs.setSaturation(FluidSystem::oilPhaseIdx, 0.5);
+        fs.setSaturation(FluidSystem::gasPhaseIdx, 0.5);
 
+        // density
+        typename FluidSystem::template ParameterCache<Scalar> paramCache;
+        paramCache.updatePhase(fs, oilPhaseIdx);
+        paramCache.updatePhase(fs, gasPhaseIdx);
+        fs.setDensity(oilPhaseIdx, FluidSystem::density(fs, paramCache, oilPhaseIdx));
+        fs.setDensity(gasPhaseIdx, FluidSystem::density(fs, paramCache, gasPhaseIdx));
 
         // fill in viscosity and enthalpy based on the state set above
         // and the fluid system defined in this class. Oleic phase is the reference        
-        typename FluidSystem::template ParameterCache<Scalar> paramCache;
-                using CFRP = Opm::ComputeFromReferencePhase<Scalar, FluidSystem>;
-        CFRP::solve(fs, paramCache,
-                    /*refPhaseIdx=*/oilPhaseIdx,
-                    /*setViscosity=*/true,
-                    /*setEnthalpy=*/false);
+        // typename FluidSystem::template ParameterCache<Scalar> paramCache;
+        //         using CFRP = Opm::ComputeFromReferencePhase<Scalar, FluidSystem>;
+        // CFRP::solve(fs, paramCache,
+        //             /*refPhaseIdx=*/oilPhaseIdx,
+        //             /*setViscosity=*/true,
+        //             /*setEnthalpy=*/false);
 
     }
 };
