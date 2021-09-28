@@ -41,7 +41,7 @@ public:
 };
 
 template <class Scalar>
-class NDekane : public Opm::Component<Scalar, NDekane<Scalar> >
+class NDecane : public Opm::Component<Scalar, NDecane<Scalar> >
 {
 public:
         /// Chemical name
