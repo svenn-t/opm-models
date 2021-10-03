@@ -17,11 +17,11 @@ struct SpatialDiscretizationSplice<TypeTag, TTag::ChiwomsNcpEcfvProblem>
 {
     using type = TTag::EcfvDiscretization;
 };
-template <class TypeTag>
-struct LocalLinearizerSplice<TypeTag, TTag::ChiwomsNcpEcfvProblem>
-{
-    using type = TTag::AutoDiffLocalLinearizer;
-};
+// template <class TypeTag>
+// struct LocalLinearizerSplice<TypeTag, TTag::ChiwomsNcpEcfvProblem>
+// {
+//     using type = TTag::AutoDiffLocalLinearizer;
+// };
 
 
 } // namespace Opm::Properties

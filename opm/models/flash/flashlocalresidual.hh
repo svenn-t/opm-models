@@ -87,7 +87,7 @@ public:
                 * Toolbox::template decay<LhsEval>(fs.saturation(phaseIdx))
                 * Toolbox::template decay<LhsEval>(intQuants.porosity());
         }
-
+        
         EnergyModule::addPhaseStorage(storage, elemCtx.intensiveQuantities(dofIdx, timeIdx), phaseIdx);
     }
 
@@ -154,8 +154,8 @@ public:
             }
             else {
                 Evaluation tmp =
-                    Toolbox::value(up.fluidState().molarDensity(phaseIdx))
-                    * extQuants.volumeFlux(phaseIdx);
+                    Toolbox::value(up.fluidState().molarDensity(phaseIdx)
+                    * extQuants.volumeFlux(phaseIdx));
 
                 for (unsigned compIdx = 0; compIdx < numComponents; ++compIdx) {
                     flux[conti0EqIdx + compIdx] +=

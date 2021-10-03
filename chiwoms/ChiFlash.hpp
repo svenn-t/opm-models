@@ -59,7 +59,6 @@ class ChiFlash
     //using Problem = GetPropType<TypeTag, Properties::Problem>;
     enum { numPhases = FluidSystem::numPhases };
     enum { numComponents = FluidSystem::numComponents };
-    enum { Comp2Idx = FluidSystem::Comp2Idx }; //rename for generic ?
     enum { Comp0Idx = FluidSystem::Comp0Idx }; //rename for generic ?
     enum { Comp1Idx = FluidSystem::Comp1Idx }; //rename for generic ?
     enum { oilPhaseIdx = FluidSystem::oilPhaseIdx};
@@ -123,7 +122,7 @@ public:
             std::cout << "Flash calculations on Cell " << spatialIdx << std::endl;
             std::cout << "Inputs are K = [" << K << "], L = [" << L << "], z = [" << globalComposition << "], P = " << fluidState.pressure(0) << ", and T = " << fluidState.temperature(0) << std::endl;
         }
-       
+        // std::cout << "z_der = " << globalComposition[0].derivative(1) << std::endl;
         // Do a stability test to check if cell is single-phase (do for all cells the first time).
         bool isStable = false;
         if ( L <= 0 || L == 1 ) {
@@ -178,11 +177,20 @@ public:
         ComponentVector y;
         Scalar sumX;
         Scalar sumY;
-        Scalar tol = 1e-3;
+        Scalar tol = 1e-8;
         for (int compIdx = 0; compIdx < numComponents; ++compIdx) {
-            x[compIdx] = Opm::min(Opm::max(fluidState.moleFraction(oilPhaseIdx, compIdx), tol), 1-tol);
-            y[compIdx] = Opm::min(Opm::max(fluidState.moleFraction(gasPhaseIdx, compIdx), tol), 1-tol);
-            
+            // if (L == 1) {
+            //     x[compIdx] = globalComposition[compIdx];
+            //     y[compIdx] = tol;
+            // }
+            // else if (L == 0) {
+            //     y[compIdx] = globalComposition[compIdx];
+            //     x[compIdx] = tol;
+            // }
+            // else {
+                x[compIdx] = Opm::min(Opm::max(fluidState.moleFraction(oilPhaseIdx, compIdx), tol), 1-tol);
+                y[compIdx] = Opm::min(Opm::max(fluidState.moleFraction(gasPhaseIdx, compIdx), tol), 1-tol);
+            // }
             sumX += Opm::getValue(x[compIdx]);
             sumY += Opm::getValue(y[compIdx]);
         }
@@ -206,8 +214,8 @@ public:
                 (R * fluidState.temperature(gasPhaseIdx));
 
         // Update saturation
-        Evaluation So = Opm::max((L*Z_L/(L*Z_L+(1-L)*Z_V)), 1e-8);
-        Evaluation Sg = Opm::max(1-So, 1e-8);
+        Evaluation So = Opm::max((L*Z_L/(L*Z_L+(1-L)*Z_V)), 0.0);
+        Evaluation Sg = Opm::max(1-So, 0.0);
         Scalar sumS = Opm::getValue(So) + Opm::getValue(Sg);
         So /= sumS;
         Sg /= sumS;
@@ -226,11 +234,24 @@ public:
         if (verbosity == 5) {
             std::cout << "So = " << So <<std::endl;
             std::cout << "Sg = " << Sg <<std::endl;
+            std::cout << "Z_L = " << Z_L <<std::endl;
+            std::cout << "Z_V = " << Z_V <<std::endl;
         }
 
         // Update densities
-        fluidState.setDensity(oilPhaseIdx, FluidSystem::density(fluidState, paramCache, oilPhaseIdx));
-        fluidState.setDensity(gasPhaseIdx, FluidSystem::density(fluidState, paramCache, gasPhaseIdx));
+        // if (L == 1) {
+        //     fluidState.setDensity(oilPhaseIdx, FluidSystem::density(fluidState, paramCache, oilPhaseIdx));
+        //     fluidState.setDensity(gasPhaseIdx, 1e-8);
+        // }
+        // else if (L == 0)
+        // {
+        //     fluidState.setDensity(gasPhaseIdx, FluidSystem::density(fluidState, paramCache, oilPhaseIdx));
+        //     fluidState.setDensity(oilPhaseIdx, 1e-8);
+        // }
+        // else {
+            fluidState.setDensity(oilPhaseIdx, FluidSystem::density(fluidState, paramCache, oilPhaseIdx));
+            fluidState.setDensity(gasPhaseIdx, FluidSystem::density(fluidState, paramCache, gasPhaseIdx));
+        // }
     }//end solve
 
     /*!

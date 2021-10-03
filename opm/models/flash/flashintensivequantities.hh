@@ -122,7 +122,6 @@ public:
 
         Evaluation sumz = 0.0;
         for (unsigned compIdx = 0; compIdx < numComponents; ++compIdx) {
-            z[compIdx] = Opm::max(z[compIdx], 1e-8);
             sumz +=z[compIdx];
         }
         z /= sumz;
