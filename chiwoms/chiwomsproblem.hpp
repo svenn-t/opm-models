@@ -26,7 +26,8 @@
 
 #include <opm/models/discretization/ecfv/ecfvdiscretization.hh>
 
-#include  <opm/simulators/linalg/parallelamgbackend.hh>
+// #include  <opm/simulators/linalg/parallelamgbackend.hh>
+#include  <opm/simulators/linalg/parallelistlbackend.hh>
 
 #include <opm/common/Exceptions.hpp>
 
@@ -182,7 +183,18 @@ struct InitialTimeStepSize<TypeTag, TTag::ChiwomsProblem>
 
 // template<class TypeTag>
 // struct LinearSolverSplice<TypeTag, TTag::ChiwomsProblem>
-// { using type = TTag::ParallelAmgLinearSolver; };
+// { using type = TTag::ParallelIstlLinearSolver; };
+
+// template<class TypeTag>
+// struct LinearSolverWrapper<TypeTag, TTag::ChiwomsProblem>
+// { using type = Opm::Linear::SolverWrapperRestartedGMRes<TypeTag>; };
+
+// template<class TypeTag>
+// struct PreconditionerWrapper<TypeTag, TTag::ChiwomsProblem>
+// { using type = Opm::Linear::PreconditionerWrapperILU<TypeTag>; };
+
+// template<class TypeTag>
+// struct PreconditionerOrder<TypeTag, TTag::ChiwomsProblem> { static constexpr int value = 2; };
 
 template<class TypeTag>
 struct LinearSolverTolerance<TypeTag, TTag::ChiwomsProblem>
@@ -589,18 +601,18 @@ private:
         Scalar S_L;
         Scalar Co2_frac;
         if (aboveMiddle_(pos)) {
-            S_L = 0.0;
-            Co2_frac = 0.999;
-        }
-        else {
             S_L = 1.0;
             Co2_frac = 0.001;
         }
-        fs.setMoleFraction(oilPhaseIdx, Comp0Idx, 1.0-Co2_frac);
-        fs.setMoleFraction(oilPhaseIdx, Comp1Idx, Co2_frac); 
+        else {
+            S_L = 0.0;
+            Co2_frac = 0.999;
+        }
+        fs.setMoleFraction(oilPhaseIdx, Comp1Idx, 1.0-Co2_frac);
+        fs.setMoleFraction(oilPhaseIdx, Comp0Idx, Co2_frac); 
 
-        fs.setMoleFraction(gasPhaseIdx, Comp0Idx, 1.0-Co2_frac);
-        fs.setMoleFraction(gasPhaseIdx, Comp1Idx, Co2_frac);
+        fs.setMoleFraction(gasPhaseIdx, Comp1Idx, 1.0-Co2_frac);
+        fs.setMoleFraction(gasPhaseIdx, Comp0Idx, Co2_frac);
         
         // saturation, oil-filled
         fs.setSaturation(FluidSystem::oilPhaseIdx, S_L);
@@ -610,7 +622,7 @@ private:
         fs.setTemperature(temperature_);
 
         // Density
-        typename FluidSystem::template ParameterCache<Scalar> paramCache;
+        typename FluidSystem::template ParameterCache<Evaluation> paramCache;
         paramCache.updatePhase(fs, oilPhaseIdx);
         paramCache.updatePhase(fs, gasPhaseIdx);
         fs.setDensity(oilPhaseIdx, FluidSystem::density(fs, paramCache, oilPhaseIdx));

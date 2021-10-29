@@ -172,37 +172,8 @@ public:
             std::cout << "********" << std::endl;
         }
 
-        // Ensure that mole fractions are not close to 0
-        ComponentVector x;
-        ComponentVector y;
-        Scalar sumX;
-        Scalar sumY;
-        Scalar tol = 1e-8;
-        for (int compIdx = 0; compIdx < numComponents; ++compIdx) {
-            // if (L == 1) {
-            //     x[compIdx] = globalComposition[compIdx];
-            //     y[compIdx] = tol;
-            // }
-            // else if (L == 0) {
-            //     y[compIdx] = globalComposition[compIdx];
-            //     x[compIdx] = tol;
-            // }
-            // else {
-                x[compIdx] = Opm::min(Opm::max(fluidState.moleFraction(oilPhaseIdx, compIdx), tol), 1-tol);
-                y[compIdx] = Opm::min(Opm::max(fluidState.moleFraction(gasPhaseIdx, compIdx), tol), 1-tol);
-            // }
-            sumX += Opm::getValue(x[compIdx]);
-            sumY += Opm::getValue(y[compIdx]);
-        }
-        x /= sumX;
-        y /= sumY;
-        for (int compIdx = 0; compIdx < numComponents; ++compIdx) {
-            fluidState.setMoleFraction(oilPhaseIdx, compIdx, x[compIdx]);
-            fluidState.setMoleFraction(gasPhaseIdx, compIdx, y[compIdx]);
-        }
-
         // Update phases
-        typename FluidSystem::template ParameterCache<Scalar> paramCache;
+        typename FluidSystem::template ParameterCache<Evaluation> paramCache;
         paramCache.updatePhase(fluidState, oilPhaseIdx);
         paramCache.updatePhase(fluidState, gasPhaseIdx);
 
@@ -214,11 +185,8 @@ public:
                 (R * fluidState.temperature(gasPhaseIdx));
 
         // Update saturation
-        Evaluation So = Opm::max((L*Z_L/(L*Z_L+(1-L)*Z_V)), 0.0);
-        Evaluation Sg = Opm::max(1-So, 0.0);
-        Scalar sumS = Opm::getValue(So) + Opm::getValue(Sg);
-        So /= sumS;
-        Sg /= sumS;
+        Evaluation So = L*Z_L/(L*Z_L+(1-L)*Z_V);
+        Evaluation Sg = 1-So;
         
         fluidState.setSaturation(oilPhaseIdx, So);
         fluidState.setSaturation(gasPhaseIdx, Sg);
@@ -239,19 +207,8 @@ public:
         }
 
         // Update densities
-        // if (L == 1) {
-        //     fluidState.setDensity(oilPhaseIdx, FluidSystem::density(fluidState, paramCache, oilPhaseIdx));
-        //     fluidState.setDensity(gasPhaseIdx, 1e-8);
-        // }
-        // else if (L == 0)
-        // {
-        //     fluidState.setDensity(gasPhaseIdx, FluidSystem::density(fluidState, paramCache, oilPhaseIdx));
-        //     fluidState.setDensity(oilPhaseIdx, 1e-8);
-        // }
-        // else {
-            fluidState.setDensity(oilPhaseIdx, FluidSystem::density(fluidState, paramCache, oilPhaseIdx));
-            fluidState.setDensity(gasPhaseIdx, FluidSystem::density(fluidState, paramCache, gasPhaseIdx));
-        // }
+        fluidState.setDensity(oilPhaseIdx, FluidSystem::density(fluidState, paramCache, oilPhaseIdx));
+        fluidState.setDensity(gasPhaseIdx, FluidSystem::density(fluidState, paramCache, gasPhaseIdx));
     }//end solve
 
     /*!
@@ -902,6 +859,9 @@ protected:
             maxIterations = 100;
         else
             maxIterations = 10;
+
+        // Store initial K in case L == 0 or L == 1
+        ComponentVector Kinit = K;
         
         // Store cout format before manipulation
         std::ios_base::fmtflags f(std::cout.flags());
@@ -958,7 +918,11 @@ protected:
             }
 
             // Check convergence
-            if (convFugRatio.two_norm() < 1e-6){
+            if (convFugRatio.two_norm() < 1e-6 || L == 0.0 || L == 1.0){
+                //  If L == 0 or L == 1, set K to initial K
+                if (L == 0.0 || L == 1.0)
+                    K = Kinit;
+
                 // Restore cout format
                 std::cout.flags(f); 
 
