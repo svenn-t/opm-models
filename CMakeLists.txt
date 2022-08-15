@@ -218,12 +218,14 @@ foreach(tapp co2injection_flash_ni_vcfv
              obstacle_ncp
              obstacle_pvs
              outflow_pvs
+             outflow_reaktoro
              diffusion_flash
              diffusion_ncp
              diffusion_pvs
              groundwater_immiscible)
   opm_add_test(${tapp})
 endforeach()
+target_link_libraries(outflow_reaktoro /home/AD.NORCERESEARCH.NO/svtv/miniconda3/envs/reaktoro/lib/libReaktoro.so /home/AD.NORCERESEARCH.NO/svtv/miniconda3/envs/reaktoro/lib/libOptima.so)
 
 opm_add_test(reservoir_blackoil_vcfv TEST_ARGS --end-time=8750000)
 opm_add_test(reservoir_blackoil_ecfv TEST_ARGS --end-time=8750000)

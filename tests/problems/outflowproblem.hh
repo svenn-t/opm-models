@@ -30,7 +30,7 @@
 #include <opm/models/pvs/pvsproperties.hh>
 
 #include <opm/material/fluidstates/CompositionalFluidState.hpp>
-#include <opm/material/fluidsystems/H2ON2LiquidPhaseFluidSystem.hpp>
+#include <opm/material/fluidsystems/H2ON2FluidSystem.hpp>
 #include <opm/material/common/Unused.hpp>
 
 #include <dune/grid/yaspgrid.hh>
@@ -53,6 +53,9 @@ struct OutflowBaseProblem {};
 
 } // namespace TTag
 
+template<class TypeTag, class MyTypeTag>
+struct Inflowrate{ using type = UndefinedProperty; };
+
 // Set the grid type
 template<class TypeTag>
 struct Grid<TypeTag, TTag::OutflowBaseProblem> { using type = Dune::YaspGrid<2>; };
@@ -70,7 +73,14 @@ private:
 
 public:
     // Two-component single phase fluid system
-    using type = Opm::H2ON2LiquidPhaseFluidSystem<Scalar>;
+    using type = Opm::H2ON2FluidSystem<Scalar>;
+};
+
+template<class TypeTag>
+struct Inflowrate<TypeTag, TTag::OutflowBaseProblem>
+{
+    using type = GetPropType<TypeTag, Scalar>;
+    static constexpr type value = 0.0;
 };
 
 // Disable gravity
@@ -135,6 +145,7 @@ class OutflowProblem : public GetPropType<TypeTag, Properties::BaseProblem>
     using Simulator = GetPropType<TypeTag, Properties::Simulator>;
     using FluidSystem = GetPropType<TypeTag, Properties::FluidSystem>;
     using MaterialLawParams = GetPropType<TypeTag, Properties::MaterialLawParams>;
+    using Indices = GetPropType<TypeTag, Properties::Indices>;
 
     // copy some indices for convenience
     enum {
@@ -148,6 +159,8 @@ class OutflowProblem : public GetPropType<TypeTag, Properties::BaseProblem>
         H2OIdx = FluidSystem::H2OIdx,
         N2Idx = FluidSystem::N2Idx
     };
+    enum { conti0EqIdx = Indices::conti0EqIdx };
+    enum { contiN2EqIdx = conti0EqIdx + N2Idx };
 
     using CoordScalar = typename GridView::ctype;
     using GlobalPosition = Dune::FieldVector<CoordScalar, dimWorld>;
@@ -182,9 +195,14 @@ public:
     }
 
     /*!
-     * \name Problem parameters
+     * \copydoc FvBaseMultiPhaseProblem::registerParameters
      */
-    //! \{
+    static void registerParameters()
+    {
+        ParentType::registerParameters();
+
+        EWOMS_REGISTER_PARAM(TypeTag, Scalar, Inflowrate, "The inflow rate [?] on the left boundary of the reservoir");
+    }
 
     /*!
      * \copydoc FvBaseProblem::name
@@ -280,24 +298,11 @@ public:
         const GlobalPosition& globalPos = context.pos(spaceIdx, timeIdx);
 
         if (onLeftBoundary_(globalPos)) {
-            Opm::CompositionalFluidState<Scalar, FluidSystem,
-                                         /*storeEnthalpy=*/false> fs;
-            initialFluidState_(fs, context, spaceIdx, timeIdx);
-            fs.setPressure(/*phaseIdx=*/0, fs.pressure(/*phaseIdx=*/0) + 1e5);
-
-            Scalar xlN2 = 2e-4;
-            fs.setMoleFraction(/*phaseIdx=*/0, N2Idx, xlN2);
-            fs.setMoleFraction(/*phaseIdx=*/0, H2OIdx, 1 - xlN2);
-
-            typename FluidSystem::template ParameterCache<Scalar> paramCache;
-            paramCache.updateAll(fs);
-            for (unsigned phaseIdx = 0; phaseIdx < numPhases; ++ phaseIdx) {
-                fs.setDensity(phaseIdx, FluidSystem::density(fs, paramCache, phaseIdx));
-                fs.setViscosity(phaseIdx, FluidSystem::viscosity(fs, paramCache, phaseIdx));
-            }
-
-            // impose an freeflow boundary condition
-            values.setFreeFlow(context, spaceIdx, timeIdx, fs);
+            Scalar inflowrate = EWOMS_GET_PARAM(TypeTag, Scalar, Inflowrate);
+            RateVector massRate(0.0);
+            massRate = 0.0;
+            massRate[contiN2EqIdx] = inflowrate;  // kg / (m^2 * s)
+            values.setMassRate(massRate);
         }
         else if (onRightBoundary_(globalPos)) {
             Opm::CompositionalFluidState<Scalar, FluidSystem,
@@ -305,7 +310,7 @@ public:
             initialFluidState_(fs, context, spaceIdx, timeIdx);
 
             // impose an outflow boundary condition
-            values.setOutFlow(context, spaceIdx, timeIdx, fs);
+            values.setFreeFlow(context, spaceIdx, timeIdx, fs);
         }
         else
             // no flow on top and bottom
@@ -369,8 +374,12 @@ private:
 
         fs.setSaturation(/*phaseIdx=*/0, 1.0);
         fs.setPressure(/*phaseIdx=*/0, 1e5 /* + rho*z */);
-        fs.setMoleFraction(/*phaseIdx=*/0, H2OIdx, 1.0);
-        fs.setMoleFraction(/*phaseIdx=*/0, N2Idx, 0);
+        fs.setMoleFraction(/*phaseIdx=*/0, H2OIdx, 0.99);
+        fs.setMoleFraction(/*phaseIdx=*/0, N2Idx, 0.01);
+        fs.setSaturation(/*phaseIdx=*/1, 0.0);
+        fs.setPressure(/*phaseIdx=*/1, 1e5 /* + rho*z */);
+        fs.setMoleFraction(/*phaseIdx=*/1, H2OIdx, 0.01);
+        fs.setMoleFraction(/*phaseIdx=*/1, N2Idx, 0.99);
         fs.setTemperature(T);
 
         typename FluidSystem::template ParameterCache<Scalar> paramCache;

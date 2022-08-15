@@ -39,6 +39,8 @@ set (opm-models_DEPS
   "Valgrind"
   # quadruple precision floating point calculations
   "Quadmath"
+  # Reaktoro modules
+  "Reaktoro REQUIRED"
   )
 
 find_package_deps(opm-models)
