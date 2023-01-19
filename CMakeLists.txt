@@ -221,7 +221,8 @@ foreach(tapp co2injection_flash_ni_vcfv
              diffusion_flash
              diffusion_ncp
              diffusion_pvs
-             groundwater_immiscible)
+             groundwater_immiscible
+             sulfatereducingbacteria_pvs)
   opm_add_test(${tapp})
 endforeach()
 
