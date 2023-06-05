@@ -38,6 +38,7 @@
 #include "blackoildiffusionmodule.hh"
 #include "blackoildispersionmodule.hh"
 #include "blackoilmicpmodules.hh"
+#include "blackoilmicrobesmodule.hh"
 
 #include <opm/common/TimingMacros.hpp>
 #include <opm/common/OpmLog/OpmLog.hpp>
@@ -79,6 +80,7 @@ class BlackOilIntensiveQuantities
     , public BlackOilBrineIntensiveQuantities<TypeTag>
     , public BlackOilEnergyIntensiveQuantities<TypeTag>
     , public BlackOilMICPIntensiveQuantities<TypeTag>
+    , public BlackOilMicrobesIntensiveQuantities<TypeTag>
 {
     using ParentType = GetPropType<TypeTag, Properties::DiscIntensiveQuantities>;
     using Implementation = GetPropType<TypeTag, Properties::IntensiveQuantities>;
@@ -107,6 +109,7 @@ class BlackOilIntensiveQuantities
     enum { enableDiffusion = getPropValue<TypeTag, Properties::EnableDiffusion>() };
     enum { enableDispersion = getPropValue<TypeTag, Properties::EnableDispersion>() };
     enum { enableMICP = getPropValue<TypeTag, Properties::EnableMICP>() };
+    enum { enableMicrobes = getPropValue<TypeTag, Properties::EnableMicrobes>() };
     enum { numPhases = getPropValue<TypeTag, Properties::NumPhases>() };
     enum { numComponents = getPropValue<TypeTag, Properties::NumComponents>() };
     enum { waterCompIdx = FluidSystem::waterCompIdx };
@@ -484,6 +487,7 @@ public:
         asImp_().updateEnergyQuantities_(elemCtx, dofIdx, timeIdx, paramCache);
         asImp_().foamPropertiesUpdate_(elemCtx, dofIdx, timeIdx);
         asImp_().MICPPropertiesUpdate_(elemCtx, dofIdx, timeIdx);
+        asImp_().MicrobesPropertiesUpdate_(elemCtx, dofIdx, timeIdx);
         asImp_().saltPropertiesUpdate_(elemCtx, dofIdx, timeIdx);
 
         // update the quantities which are required by the chosen
@@ -599,6 +603,7 @@ private:
     friend BlackOilFoamIntensiveQuantities<TypeTag>;
     friend BlackOilBrineIntensiveQuantities<TypeTag>;
     friend BlackOilMICPIntensiveQuantities<TypeTag>;
+    friend BlackOilMicrobesIntensiveQuantities<TypeTag>;
 
     Implementation& asImp_()
     { return *static_cast<Implementation*>(this); }
